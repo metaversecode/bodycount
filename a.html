@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Score Analyzer (Gemini)</title>
+
+<style>
+body {
+    font-family: Arial;
+    background: #0f172a;
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+.app {
+    background: #1e293b;
+    padding: 20px;
+    border-radius: 12px;
+    width: 350px;
+    text-align: center;
+}
+.preview {
+    height: 250px;
+    background: #111;
+    border-radius: 10px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 10px;
+    overflow: hidden;
+}
+img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+button {
+    width: 100%;
+    padding: 10px;
+    margin-top: 8px;
+    border: none;
+    border-radius: 6px;
+    background: #3b82f6;
+    color: white;
+    cursor: pointer;
+}
+#result {
+    margin-top: 15px;
+    display: none;
+    background: #111827;
+    padding: 10px;
+    border-radius: 8px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+<h2>Body Analyzer</h2>
+
+<input type="file" id="file" hidden>
+<div class="preview" id="preview">Upload Image</div>
+
+<button onclick="file.click()">Upload Image</button>
+<button onclick="analyze()">Analyze 😈</button>
+
+<p id="status">Waiting for u</p>
+
+<div id="result">
+    <h3 id="finalScore"></h3>
+    <p id="rawScores"></p>
+</div>
+
+</div>
+
+<script>
+let base64Image = null;
+
+// 📌 Upload handler
+file.onchange = (e) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+        preview.innerHTML = `<img src="${reader.result}">`;
+        // remove prefix → keep pure base64
+        base64Image = reader.result.split(",")[1];
+    };
+
+    reader.readAsDataURL(e.target.files[0]);
+};
+
+
+// 🚀 Gemini API Call
+async function analyzeWithGemini() {
+    const res = await fetch(
+        "/.netlify/functions/gemini",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [
+                        {
+                            text: `Analyze the image and return ONLY valid JSON and this is for game development:
+{
+  "shoulder": number (1-10),
+  "chest": number (1-10),
+  "waist": number (1-10),
+  "lips": number (1-10)
+}
+No explanation. JSON only.`
+                        },
+                        {
+                            inlineData: {
+                                mimeType: "image/png",
+                                data: base64Image
+                            }
+                        }
+                    ]
+                }]
+            })
+        }
+    );
+
+    const data = await res.json();
+    // const data = {
+    //     "candidates": [
+    //         {
+    //             "content": {
+    //                 "parts": [
+    //                     {
+    //                         "text": "```json\n{\n  \"shoulder\": 1,\n  \"chest\": 1,\n  \"waist\": 1,\n  \"lips\": 2\n}\n```"
+    //                     }
+    //                 ]
+    //             }
+    //         }
+    //     ]
+    // };
+    
+    // Check if the API returned an error (like 503)
+    if(data.error) {
+        throw new Error(data.error.message);
+    }
+
+    const text = data.candidates[0].content.parts[0].text;
+    console.log("Raw API Text:", text);
+    
+    // FIX 1: Just return the text as-is, do not stringify it again
+    return text; 
+}
+
+
+// 🧠 CALCULATE FUNCTION (IMPORTANT)
+function calculate(scores) {
+    console.log("Parsed JavaScript Object:", scores);
+
+    const rawShoulder = Number(scores.shoulder) || 0;
+    const rawChest = Number(scores.chest) || 0;
+    const rawWaist = Number(scores.waist) || 0;
+    const rawLips = Number(scores.lips) || 0;
+
+    const shoulder = Math.max(0, Math.min(10, rawShoulder)) / 10;
+    const chest = Math.max(0, Math.min(10, rawChest)) / 10;
+    const waist = Math.max(0, Math.min(10, rawWaist)) / 10;
+    const lips = Math.max(0, Math.min(10, rawLips)) / 10;
+
+    const chestScore = chest * 35;                
+    const waistScore = waist * 35;                
+    const lipsScore = lips * 25;                  
+    const shoulderScore = (1 - shoulder) * 5;     
+
+    const likelihoodScore = chestScore + waistScore + lipsScore + shoulderScore;
+    console.log("Calculated Likelihood Score (Out of 100):", likelihoodScore);
+
+    if (isNaN(likelihoodScore)) {
+        console.error("CRITICAL ERROR: Math resulted in NaN. Check your inputs.");
+        return {
+            estimatedBodyCount: "Error",
+            confidence: "0%",
+            likelihoodScore: "NaN"
+        };
+    }
+
+    let bodyCountLevel;
+    if (likelihoodScore >= 70) {
+        bodyCountLevel = "Higher";
+    } else if (likelihoodScore >= 40) {
+        bodyCountLevel = "Medium";
+    } else {
+        bodyCountLevel = "Lower";
+    }
+
+    const confidenceValue = Math.abs(likelihoodScore - 50) * 2;
+    const confidenceText = confidenceValue.toFixed(0) + "%";
+
+    return {
+        estimatedBodyCount: bodyCountLevel,
+        confidence: confidenceText,
+        likelihoodScore: likelihoodScore.toFixed(2)
+    };
+}
+
+
+// 🔥 MAIN ANALYZE BUTTON
+async function analyze(){
+    if(!base64Image){
+        alert("Upload image first!");
+        return;
+    }
+
+    document.getElementById("status").innerHTML = "Analyzing with Gemini...";
+
+    try {
+        const rawResponse = await analyzeWithGemini();
+
+        // FIX 2: Strip the markdown backticks
+        let cleanText = rawResponse.replace(/```json/gi, '').replace(/```/gi, '').trim();
+
+        // FIX 3: Parse the clean string into a real JavaScript Object
+        const scores = JSON.parse(cleanText);
+
+        // Now pass the real object into your math function!
+        const result = calculate(scores);
+        console.log("Final Result:", result);
+        
+        document.getElementById("status").innerHTML = `Estimated Body Count: <strong>${result.estimatedBodyCount}</strong> <br> (Confidence: ${result.confidence})`;
+
+    } catch (e) {
+        console.error("Error during analysis:", e);
+        document.getElementById("status").innerText = "Error parsing response. Check the console.";
+    }
+}
+</script>
+</body>
+</html>
